@@ -1,0 +1,25 @@
+# Docker volumes
+.docker/
+
+# Claude metadata
+.claude/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Backup files
+*.bak
+*.backup
+*-backup.*
