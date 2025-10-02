@@ -30,8 +30,24 @@ RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_B
     unzip -o -q jdbcstore.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
     rm jdbcstore.zip
 
-# Create data directory
-RUN mkdir -p ${GEOSERVER_DATA_DIR}
+# Download and install JDBCConfig community module (for catalog storage in database)
+RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.24-SNAPSHOT-jdbcconfig-plugin.zip -O jdbcconfig.zip && \
+    unzip -o -q jdbcconfig.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
+    rm jdbcconfig.zip
+
+# Create data directory and subdirectories
+RUN mkdir -p ${GEOSERVER_DATA_DIR} && \
+    mkdir -p ${GEOSERVER_DATA_DIR}/jdbcconfig && \
+    mkdir -p ${GEOSERVER_DATA_DIR}/jdbcconfig/scripts
+
+# Extract init scripts from JDBCConfig JAR to data directory
+RUN cd /tmp && \
+    jar xf /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/gs-jdbcconfig-*.jar && \
+    find . -name "initdb*.sql" -exec cp {} ${GEOSERVER_DATA_DIR}/jdbcconfig/scripts/ \; && \
+    cd - && rm -rf /tmp/*
+
+# Copy JDBCConfig configuration
+COPY jdbcconfig.properties ${GEOSERVER_DATA_DIR}/jdbcconfig/jdbcconfig.properties
 
 # Copy startup script
 COPY entrypoint.sh /opt/entrypoint.sh
