@@ -1,0 +1,173 @@
+# GeoServer JDBC Security Docker Project
+
+## Project Overview
+This is a Docker-based deployment of GeoServer 2.24.5 with PostgreSQL/PostGIS backend for JDBC-based user and role management. The project includes AuthKey extension for API authentication.
+
+## Architecture
+- **GeoServer 2.24.5** running on Tomcat 9 with JDK 11
+- **PostGIS 15-3.3** for spatial database backend
+- **JDBC Store plugin** for user/role management in PostgreSQL
+- **AuthKey extension** for stateless API authentication
+- All security tables in PostgreSQL `public` schema
+
+## Critical Implementation Details
+
+### Database Schema Conventions
+**IMPORTANT**: GeoServer's default DML queries expect specific column names:
+- Users table MUST use `name` column (NOT `username`)
+- `enabled` column MUST be `CHAR(1)` with values '1' (enabled) or '0' (disabled)
+- Password format: `plain:password` for plain text passwords
+- User properties table uses `username` to reference users (`users.name`)
+
+### File Structure
+```
+.
+├── docker-compose.yml    # Service orchestration
+├── Dockerfile           # Custom GeoServer image with extensions
+├── entrypoint.sh        # Simple startup script (waits for PostgreSQL)
+├── init-db.sql          # PostgreSQL initialization with security tables
+├── SETUP.md            # Complete manual setup instructions
+├── README.md           # Project documentation
+└── .gitignore          # Excludes .claude/ and temporary files
+```
+
+### Database Tables (public schema)
+**User Management:**
+- `users` (name VARCHAR(128), password VARCHAR(254), enabled CHAR(1))
+- `user_props` (username, propname, propvalue) - for AuthKey UUIDs
+- `user_roles` (username, rolename)
+
+**Group Management:**
+- `groups` (name, enabled)
+- `group_members` (groupname, username)
+- `group_roles` (groupname, rolename)
+
+**Role Management:**
+- `roles` (name, parent)
+- `role_props` (rolename, propname, propvalue)
+
+### Default Configuration
+- **Admin user**: name='admin', password='plain:geoserver', enabled='1'
+- **Default roles**: ADMIN, GROUP_ADMIN, AUTHENTICATED
+- **Admin assigned**: ADMIN role via user_roles table
+- **GeoServer URL**: http://localhost:8080/geoserver
+- **PostgreSQL**: localhost:5432, database=geoserver, user=geoserver, password=geoserver
+
+## What Works (Automated)
+✅ Docker containers build and start automatically
+✅ PostgreSQL with PostGIS extensions initialized
+✅ All 8 security tables created in public schema
+✅ Admin user and roles pre-populated in database
+✅ GeoServer starts with AuthKey and JDBC Store extensions installed
+✅ Database connection parameters pre-configured
+
+## What Requires Manual Setup (5-10 minutes via web UI)
+⚙️ **JDBC User Group Service** - Must be created via GeoServer web UI
+⚙️ **JDBC Role Service** - Must be created via GeoServer web UI
+⚙️ **AuthKey filter** - Must be created and added to filter chain via web UI
+
+**Why manual?** Automated pre-configuration of these services caused GeoServer startup failures and migration errors. Manual setup via web UI is reliable and well-documented in SETUP.md.
+
+## Common Issues and Solutions
+
+### Issue: "column 'name' does not exist"
+**Cause**: Database schema doesn't match GeoServer's default DML queries
+**Solution**: Verify `users` table uses `name` column (not `username`)
+
+### Issue: GeoServer crashes on login after JDBC service creation
+**Cause**: Incomplete DDL configuration in JDBC service setup
+**Solution**: When creating JDBC services, fill in ALL DDL attribute fields:
+- Users table: `users`
+- User name attribute: `name` (critical!)
+- User password attribute: `password`
+- User enabled attribute: `enabled`
+- (and all other DDL fields as documented in SETUP.md)
+
+### Issue: Services disappear after `docker-compose down -v`
+**Expected behavior**: The `-v` flag deletes volumes including GeoServer data directory
+**Solution**: Services must be recreated via web UI (database tables persist)
+
+### Issue: AuthKey ClassNotFoundException warnings
+**Cause**: AuthKey filter config existed without filter being added to chain
+**Status**: Fixed - removed automatic AuthKey filter configuration
+
+## Development History / Lessons Learned
+
+1. **Attempted full automation**: Initially tried to pre-configure JDBC services via XML files
+   - Result: GeoServer migration errors, NullPointerExceptions, crashes
+   - Lesson: GeoServer's initialization is complex; pre-configuration is fragile
+
+2. **Schema mismatches**: First version used `security` schema
+   - Problem: GeoServer's default queries don't include schema prefixes
+   - Solution: Moved all tables to `public` schema
+
+3. **Column naming**: First version used `username` in users table
+   - Problem: GeoServer's default DML expects `name` column
+   - Solution: Changed to match GeoServer conventions
+
+4. **Data types**: First version used BOOLEAN for enabled column
+   - Problem: GeoServer expects CHAR(1) with '1'/'0'
+   - Solution: Changed to CHAR(1) type
+
+5. **Start/stop approach**: Tried starting/stopping GeoServer during entrypoint
+   - Problem: Port conflicts, race conditions
+   - Solution: Simplified to single-pass startup
+
+## Extension URLs (for reference)
+- AuthKey: `https://build.geoserver.org/geoserver/2.24.x/ext-latest/geoserver-2.24-SNAPSHOT-authkey-plugin.zip`
+- JDBC Store: `https://build.geoserver.org/geoserver/2.24.x/community-latest/geoserver-2.24-SNAPSHOT-jdbcstore-plugin.zip`
+
+## Best Practices for Modifications
+
+1. **Don't automate JDBC service creation** - it's fragile and error-prone
+2. **Always match GeoServer's default DML** - changing queries is complex
+3. **Use `public` schema** - avoids schema prefix issues
+4. **Test with fresh volumes** - use `docker-compose down -v` to verify clean setup
+5. **Document manual steps** - SETUP.md is the source of truth for configuration
+
+## Testing the Complete Solution
+```bash
+# Clean slate
+docker-compose down -v
+
+# Build and start
+docker-compose up --build -d
+
+# Verify database
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "\dt public.*"
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT * FROM users;"
+
+# Access GeoServer and follow SETUP.md for JDBC service creation
+open http://localhost:8080/geoserver
+```
+
+## Configuration Parameters for JDBC Services
+
+### JDBC User Group Service
+- Name: `jdbc`
+- Password encryption: `digestPasswordEncoder`
+- Connection URL: `jdbc:postgresql://postgis:5432/geoserver`
+- DDL: users(name, password, enabled), groups(name, enabled), user_props(username, propname, propvalue), group_members(groupname, username)
+
+### JDBC Role Service
+- Name: `jdbc_roles`
+- Admin role: `ADMIN`
+- Group admin role: `GROUP_ADMIN`
+- Connection URL: `jdbc:postgresql://postgis:5432/geoserver`
+- DDL: roles(name, parent), role_props(rolename, propname, propvalue), user_roles(username, rolename), group_roles(groupname, rolename)
+
+### AuthKey Filter
+- Name: `authkey`
+- Parameter name: `UUID`
+- User/Group service: `jdbc`
+- Synchronize: enabled
+
+## Documentation
+- `README.md` - Quick start and overview
+- `SETUP.md` - Complete step-by-step manual configuration
+- Both files are kept in sync and up-to-date
+
+## Git Repository
+- `.gitignore` excludes: `.claude/`, Docker volumes, IDE files, backups
+- Clean commit with descriptive message
+- Ready to push to GitHub
