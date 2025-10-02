@@ -1,14 +1,15 @@
 # GeoServer JDBC Security Docker Project
 
 ## Project Overview
-This is a Docker-based deployment of GeoServer 2.24.5 with PostgreSQL/PostGIS backend for JDBC-based user and role management. The project includes AuthKey extension for API authentication.
+This is a Docker-based deployment of GeoServer 2.24.5 with PostgreSQL/PostGIS backend for JDBC-based user and role management, plus catalog configuration stored in PostgreSQL. The project includes AuthKey extension for API authentication.
 
 ## Architecture
 - **GeoServer 2.24.5** running on Tomcat 9 with JDK 11
 - **PostGIS 15-3.3** for spatial database backend
 - **JDBC Store plugin** for user/role management in PostgreSQL
+- **JDBCConfig plugin** for catalog configuration in PostgreSQL
 - **AuthKey extension** for stateless API authentication
-- All security tables in PostgreSQL `public` schema
+- All security tables and catalog tables in PostgreSQL `public` schema
 
 ## Critical Implementation Details
 
@@ -46,6 +47,13 @@ This is a Docker-based deployment of GeoServer 2.24.5 with PostgreSQL/PostGIS ba
 - `roles` (name, parent)
 - `role_props` (rolename, propname, propvalue)
 
+**Catalog Configuration (JDBCConfig):**
+- `object` - Catalog objects (workspaces, stores, layers, etc.)
+- `object_property` - Object properties and relationships
+- `type` - Catalog object type definitions (21 types)
+- `property_type` - Property type definitions
+- `default_object` - Default object mappings
+
 ### Default Configuration
 - **Admin user**: name='admin', password='plain:geoserver', enabled='1'
 - **Default roles**: ADMIN, GROUP_ADMIN, AUTHENTICATED
@@ -57,8 +65,10 @@ This is a Docker-based deployment of GeoServer 2.24.5 with PostgreSQL/PostGIS ba
 ✅ Docker containers build and start automatically
 ✅ PostgreSQL with PostGIS extensions initialized
 ✅ All 8 security tables created in public schema
+✅ All 5 JDBCConfig catalog tables created automatically
 ✅ Admin user and roles pre-populated in database
-✅ GeoServer starts with AuthKey and JDBC Store extensions installed
+✅ GeoServer starts with AuthKey, JDBC Store, and JDBCConfig extensions installed
+✅ JDBCConfig automatically initializes and imports default catalog to database
 ✅ Database connection parameters pre-configured
 
 ## What Requires Manual Setup (5-10 minutes via web UI)
@@ -116,6 +126,7 @@ This is a Docker-based deployment of GeoServer 2.24.5 with PostgreSQL/PostGIS ba
 ## Extension URLs (for reference)
 - AuthKey: `https://build.geoserver.org/geoserver/2.24.x/ext-latest/geoserver-2.24-SNAPSHOT-authkey-plugin.zip`
 - JDBC Store: `https://build.geoserver.org/geoserver/2.24.x/community-latest/geoserver-2.24-SNAPSHOT-jdbcstore-plugin.zip`
+- JDBCConfig: `https://build.geoserver.org/geoserver/2.24.x/community-latest/geoserver-2.24-SNAPSHOT-jdbcconfig-plugin.zip`
 
 ## Best Practices for Modifications
 
@@ -133,9 +144,13 @@ docker-compose down -v
 # Build and start
 docker-compose up --build -d
 
-# Verify database
+# Verify database tables (security + catalog)
 docker exec geoserver-postgis psql -U geoserver -d geoserver -c "\dt public.*"
 docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT * FROM users;"
+
+# Verify JDBCConfig tables
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT typename FROM type;"
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT COUNT(*) FROM object;"
 
 # Access GeoServer and follow SETUP.md for JDBC service creation
 open http://localhost:8080/geoserver

@@ -4,23 +4,28 @@ This document explains the architecture, design decisions, and lessons learned b
 
 ## Project Goal
 
-Create a Docker-based GeoServer deployment where users and roles are stored in PostgreSQL instead of XML files, with minimal manual configuration required.
+Create a Docker-based GeoServer deployment where:
+1. Users and roles are stored in PostgreSQL instead of XML files
+2. Catalog configuration (workspaces, layers, styles) is stored in PostgreSQL
+3. Minimal manual configuration required
 
 ## Architecture Decisions
 
-### Why PostgreSQL for User Management?
+### Why PostgreSQL for User Management and Catalog Storage?
 
-**Problem**: GeoServer's default user/role storage uses XML files, which:
-- Don't scale well for many users
+**Problem**: GeoServer's default storage uses XML files for both security and catalog, which:
+- Don't scale well for many users or complex catalogs
 - Are difficult to manage programmatically
 - Can't be shared across multiple GeoServer instances
 - Lack audit trails and transaction safety
+- Risk of file corruption
 
-**Solution**: JDBC-backed security using PostgreSQL provides:
-- Centralized user management
-- SQL-based user administration
-- Multi-instance support
+**Solution**: JDBC-backed security and catalog using PostgreSQL provides:
+- Centralized user management and catalog configuration
+- SQL-based administration
+- Multi-instance support (shared catalog)
 - Database-level security and auditing
+- ACID transactions for configuration changes
 
 ### Why Manual JDBC Service Configuration?
 
@@ -148,6 +153,36 @@ RUN wget https://build.geoserver.org/geoserver/2.24.x/community-latest/
 
 **Status**: Installed and available, activated via web UI configuration.
 
+### JDBCConfig Plugin
+
+**Purpose**: Stores GeoServer catalog configuration in PostgreSQL instead of XML files.
+
+**Installation**: Community module, downloaded during build:
+```dockerfile
+RUN wget https://build.geoserver.org/geoserver/2.24.x/community-latest/
+         geoserver-2.24-SNAPSHOT-jdbcconfig-plugin.zip
+```
+
+**Configuration**: Fully automated via `jdbcconfig.properties`:
+- `enabled=true` - Activates JDBCConfig on startup
+- `initdb=true` - Automatically creates database tables
+- `import=true` - Imports existing catalog from data directory
+- Direct JDBC connection to PostgreSQL
+
+**Init Scripts**: Extracted from plugin JAR during build:
+```dockerfile
+RUN jar xf /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/gs-jdbcconfig-*.jar && \
+    find . -name "initdb*.sql" -exec cp {} ${GEOSERVER_DATA_DIR}/jdbcconfig/scripts/ \;
+```
+
+**Why This Works**: Unlike JDBC security services, JDBCConfig:
+- Has built-in initialization support via `initdb=true`
+- Includes SQL scripts in the plugin JAR
+- Doesn't require complex Spring bean configuration
+- Can be safely pre-configured before first startup
+
+**Status**: Fully automated - no manual configuration required.
+
 ## Database Schema Design
 
 ### User Management Tables
@@ -181,6 +216,23 @@ roles           -- Role definitions (name, parent for hierarchy)
 - Group-based role inheritance
 - Role hierarchy via parent relationships
 - Properties for extensibility
+
+### Catalog Configuration Tables (JDBCConfig)
+
+```sql
+object            -- Catalog objects (workspaces, stores, layers, styles)
+object_property   -- Object properties and relationships
+type              -- Catalog object type definitions (21 types)
+property_type     -- Property metadata
+default_object    -- Default workspace/datastore mappings
+```
+
+**Key Features**:
+- Stores entire GeoServer catalog (workspaces, stores, layers, styles)
+- 21 different object types supported
+- Relational property storage with indexing
+- Automatic import from XML on first run
+- All configuration changes persisted to database immediately
 
 ## Common Pitfalls & Solutions
 
@@ -231,23 +283,31 @@ After `docker-compose up --build`:
 2. **Database tables created**:
    ```bash
    docker exec geoserver-postgis psql -U geoserver -d geoserver -c "\dt public.*"
-   # Should show 8 security tables + spatial_ref_sys
+   # Should show 8 security tables + 5 JDBCConfig tables + spatial_ref_sys
    ```
 
-3. **Admin user exists**:
+3. **JDBCConfig initialized**:
+   ```bash
+   docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT typename FROM type;"
+   # Should show 21 catalog object types
+   docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT COUNT(*) FROM object;"
+   # Should show ~12 default catalog objects
+   ```
+
+4. **Admin user exists**:
    ```bash
    docker exec geoserver-postgis psql -U geoserver -d geoserver \
      -c "SELECT name, enabled FROM users;"
    # Should show: admin | 1
    ```
 
-4. **GeoServer accessible**:
+5. **GeoServer accessible**:
    ```bash
    curl -f http://localhost:8080/geoserver/web/
    # Should return 302 redirect (success)
    ```
 
-5. **Manual configuration**:
+6. **Manual configuration**:
    - Follow SETUP.md to create JDBC services
    - Verify admin user appears in Users tab
    - Verify roles appear in Roles tab
@@ -272,6 +332,13 @@ After `docker-compose up --build`:
 - Documented manual steps clearly
 - **Result**: Reliable, reproducible setup
 
+### Phase 4: JDBCConfig Integration
+- Added JDBCConfig community plugin
+- Automated catalog table initialization
+- Extracted init scripts from plugin JAR
+- Pre-configured via jdbcconfig.properties
+- **Result**: Fully automated catalog storage in PostgreSQL
+
 ### Key Insight
 
 **Principle**: Automate infrastructure, document configuration.
@@ -290,6 +357,7 @@ After `docker-compose up --build`:
 | `docker-compose.yml` | Service orchestration | Docker |
 | `Dockerfile` | GeoServer image build | Docker |
 | `init-db.sql` | Database initialization | PostgreSQL |
+| `jdbcconfig.properties` | JDBCConfig configuration | GeoServer |
 | `entrypoint.sh` | Startup coordination | Container runtime |
 
 ## Future Improvements
@@ -304,7 +372,7 @@ After `docker-compose up --build`:
 
 ### What NOT to Add
 
-1. ❌ **Automated JDBC Configuration**: Learned it's unreliable
+1. ❌ **Automated JDBC Security Service Configuration**: Learned it's unreliable (but JDBCConfig automation works!)
 2. ❌ **Custom DML Queries**: Maintenance burden, version compatibility issues
 3. ❌ **Non-standard Schema Names**: Breaks GeoServer conventions
 
@@ -329,13 +397,27 @@ A: Yes, but:
 - Test spatial extensions if needed
 - Update connection URLs
 
+**Q: Why can JDBCConfig be automated but JDBC security services cannot?**
+A: JDBCConfig has:
+- Built-in `initdb` property support
+- SQL scripts bundled in plugin JAR
+- Simple property-based configuration
+- No complex Spring bean dependencies
+
+JDBC security services require:
+- Complex Spring bean configuration
+- Proper initialization order
+- Migration logic coordination
+- Multiple XML configuration files
+
 ## Resources
 
 - [GeoServer JDBC Security Docs](https://docs.geoserver.org/latest/en/user/security/usergrouprole/jdbc.html)
+- [GeoServer JDBCConfig Docs](https://docs.geoserver.org/main/en/user/community/jdbcconfig/configuration.html)
 - [GeoServer AuthKey Extension](https://docs.geoserver.org/latest/en/user/extensions/authkey/index.html)
 - [PostGIS Documentation](https://postgis.net/documentation/)
 - [Docker Compose Specification](https://docs.docker.com/compose/compose-file/)
 
 ---
 
-**For AI Assistants**: This project prioritizes reliability over automation. Manual configuration via web UI is intentional and should not be "fixed" with automated XML configuration.
+**For AI Assistants**: This project prioritizes reliability over automation. Manual JDBC security service configuration via web UI is intentional and should not be "fixed" with automated XML configuration. However, JDBCConfig automation is reliable and fully supported.
