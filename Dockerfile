@@ -1,8 +1,8 @@
 FROM tomcat:9-jdk11
 
 # Set GeoServer version
-ENV GEOSERVER_VERSION=2.24.5
-ENV GEOSERVER_BRANCH=2.24.x
+ENV GEOSERVER_VERSION=2.25.0
+ENV GEOSERVER_BRANCH=2.25.x
 ENV GEOSERVER_DATA_DIR=/opt/geoserver/data_dir
 
 # Install required packages
@@ -21,17 +21,17 @@ RUN wget -q https://sourceforge.net/projects/geoserver/files/GeoServer/${GEOSERV
     rm geoserver-${GEOSERVER_VERSION}-war.zip geoserver.war
 
 # Download and install AuthKey extension
-RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/ext-latest/geoserver-2.24-SNAPSHOT-authkey-plugin.zip -O authkey.zip && \
+RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/ext-latest/geoserver-2.25-SNAPSHOT-authkey-plugin.zip -O authkey.zip && \
     unzip -o -q authkey.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
     rm authkey.zip
 
 # Download and install JDBC Store community module (for user/role management)
-RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.24-SNAPSHOT-jdbcstore-plugin.zip -O jdbcstore.zip && \
+RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.25-SNAPSHOT-jdbcstore-plugin.zip -O jdbcstore.zip && \
     unzip -o -q jdbcstore.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
     rm jdbcstore.zip
 
 # Download and install JDBCConfig community module (for catalog storage in database)
-RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.24-SNAPSHOT-jdbcconfig-plugin.zip -O jdbcconfig.zip && \
+RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.25-SNAPSHOT-jdbcconfig-plugin.zip -O jdbcconfig.zip && \
     unzip -o -q jdbcconfig.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
     rm jdbcconfig.zip
 
