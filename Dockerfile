@@ -20,17 +20,19 @@ RUN wget -q https://sourceforge.net/projects/geoserver/files/GeoServer/${GEOSERV
     unzip -q geoserver.war -d /usr/local/tomcat/webapps/geoserver && \
     rm geoserver-${GEOSERVER_VERSION}-war.zip geoserver.war
 
-# Download and install AuthKey extension
-RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/ext-latest/geoserver-2.25-SNAPSHOT-authkey-plugin.zip -O authkey.zip && \
+# Download and install AuthKey extension (stable release)
+RUN wget --progress=dot:mega https://sourceforge.net/projects/geoserver/files/GeoServer/${GEOSERVER_VERSION}/extensions/geoserver-${GEOSERVER_VERSION}-authkey-plugin.zip -O authkey.zip && \
     unzip -o -q authkey.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
     rm authkey.zip
 
 # Download and install JDBC Store community module (for user/role management)
-RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.25-SNAPSHOT-jdbcstore-plugin.zip -O jdbcstore.zip && \
-    unzip -o -q jdbcstore.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
-    rm jdbcstore.zip
+# DISABLED: Causes conflicts with import mode, keep security in XML for now
+# RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.25-SNAPSHOT-jdbcstore-plugin.zip -O jdbcstore.zip && \
+#     unzip -o -q jdbcstore.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
+#     rm jdbcstore.zip
 
 # Download and install JDBCConfig community module (for catalog storage in database)
+# Note: JDBCConfig is a community module and only available as SNAPSHOT build
 RUN wget --progress=dot:mega https://build.geoserver.org/geoserver/${GEOSERVER_BRANCH}/community-latest/geoserver-2.25-SNAPSHOT-jdbcconfig-plugin.zip -O jdbcconfig.zip && \
     unzip -o -q jdbcconfig.zip -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/ && \
     rm jdbcconfig.zip
@@ -46,7 +48,7 @@ RUN cd /tmp && \
     find . -name "initdb*.sql" -exec cp {} ${GEOSERVER_DATA_DIR}/jdbcconfig/scripts/ \; && \
     cd - && rm -rf /tmp/*
 
-# Copy JDBCConfig configuration
+# Copy JDBC module configurations
 COPY jdbcconfig.properties ${GEOSERVER_DATA_DIR}/jdbcconfig/jdbcconfig.properties
 
 # Copy startup script
