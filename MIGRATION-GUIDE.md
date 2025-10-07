@@ -9,6 +9,24 @@
 
 ---
 
+## Key Lessons Learned
+
+**CRITICAL DISCOVERIES:**
+
+1. **Create Tables Manually:** GeoServer's "Create database tables" checkbox is unreliable - it works sometimes but often fails. ALWAYS create security tables manually using the SQL scripts provided in this guide.
+
+2. **Enabled Column Values:** GeoServer expects `'Y'` for enabled users and `'N'` for disabled users, NOT `'1'`/`'0'`. The migration script has been updated to use the correct values.
+
+3. **Service Name Matters:** The JDBC service must be named exactly `jdbc` (no typos!). A typo like `jbc` will cause "Unknown user/group service" errors.
+
+4. **Restart Required:** After creating JDBC services and after configuring the AuthKey filter, you MUST restart GeoServer for changes to take effect.
+
+5. **Two-Step Role Configuration:** You must create the JDBC role service first, then edit it again to set administrator roles (ADMIN and GROUP_ADMIN) because the dropdowns are populated from the service itself.
+
+6. **AuthKey Property Name:** The UserPropertyAuthenticationKeyMapper looks for a property named `UUID` (hardcoded). Make sure user properties use this exact name.
+
+---
+
 ## Prerequisites
 
 1. **Source data_dir backup** at: `C:/Temp/geoserver-data-dir/geoserver-data-dir/`
@@ -230,10 +248,41 @@ LIMIT 10;
 
 ## Phase 3: Security Migration (JDBC User/Role Services)
 
-### Step 3.1: Create Security Tables
+### Step 3.1: Create Security Tables Manually
+
+**IMPORTANT:** GeoServer's "Create database tables" checkbox is unreliable. Create the security tables manually before configuring the JDBC services.
 
 ```bash
 docker exec -i geoserver-postgis psql -U geoserver -d geoserver << 'EOF'
+-- User tables
+CREATE TABLE IF NOT EXISTS users (
+    name VARCHAR(128) PRIMARY KEY,
+    password VARCHAR(254),
+    enabled CHAR(1) NOT NULL DEFAULT 'Y'
+);
+
+CREATE TABLE IF NOT EXISTS user_props (
+    username VARCHAR(128) NOT NULL,
+    propname VARCHAR(128) NOT NULL,
+    propvalue VARCHAR(2048),
+    PRIMARY KEY (username, propname),
+    FOREIGN KEY (username) REFERENCES users(name) ON DELETE CASCADE
+);
+
+-- Group tables
+CREATE TABLE IF NOT EXISTS groups (
+    name VARCHAR(128) PRIMARY KEY,
+    enabled CHAR(1) NOT NULL DEFAULT 'Y'
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+    groupname VARCHAR(128) NOT NULL,
+    username VARCHAR(128) NOT NULL,
+    PRIMARY KEY (groupname, username),
+    FOREIGN KEY (groupname) REFERENCES groups(name) ON DELETE CASCADE,
+    FOREIGN KEY (username) REFERENCES users(name) ON DELETE CASCADE
+);
+
 -- Role tables
 CREATE TABLE IF NOT EXISTS roles (
     name VARCHAR(128) PRIMARY KEY,
@@ -261,49 +310,113 @@ CREATE TABLE IF NOT EXISTS group_roles (
     PRIMARY KEY (groupname, rolename),
     FOREIGN KEY (rolename) REFERENCES roles(name) ON DELETE CASCADE
 );
+EOF
+```
 
--- User tables
-CREATE TABLE IF NOT EXISTS users (
-    name VARCHAR(128) PRIMARY KEY,
-    password VARCHAR(254),
-    enabled CHAR(1) NOT NULL DEFAULT '1'
-);
+**Verify all tables created:**
+```bash
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('users', 'user_props', 'groups', 'group_members', 'roles', 'role_props', 'user_roles', 'group_roles') ORDER BY tablename;"
+```
 
-CREATE TABLE IF NOT EXISTS user_props (
-    username VARCHAR(128) NOT NULL,
-    propname VARCHAR(128) NOT NULL,
-    propvalue VARCHAR(2048),
-    PRIMARY KEY (username, propname),
-    FOREIGN KEY (username) REFERENCES users(name) ON DELETE CASCADE
-);
+**Expected output:**
+```
+ tablename
+-----------
+ group_members
+ group_roles
+ groups
+ role_props
+ roles
+ user_props
+ user_roles
+ users
+(8 rows)
+```
 
--- Group tables
-CREATE TABLE IF NOT EXISTS groups (
-    name VARCHAR(128) PRIMARY KEY,
-    enabled CHAR(1) NOT NULL DEFAULT '1'
-);
+### Step 3.2: Create JDBC User/Group Service
 
-CREATE TABLE IF NOT EXISTS group_members (
-    groupname VARCHAR(128) NOT NULL,
-    username VARCHAR(128) NOT NULL,
-    PRIMARY KEY (groupname, username),
-    FOREIGN KEY (groupname) REFERENCES groups(name) ON DELETE CASCADE,
-    FOREIGN KEY (username) REFERENCES users(name) ON DELETE CASCADE
-);
+1. Open browser: http://localhost:8080/geoserver/web/
+2. Login with XML admin credentials from source system
+3. Navigate to: **Security** → **Users, Groups, and Roles**
 
--- Insert default roles
+Click **"Add new"** under "User Group Services" section:
+
+**Configuration:**
+- Name: `jdbc` (IMPORTANT: exact spelling, no typos!)
+- Password encryption: **Digest**
+- Password policy: `default` (**NOT** `master`!)
+
+**JDBC Connection:**
+- JDBC URL: `jdbc:postgresql://postgis:5432/geoserver`
+- Driver class: `org.postgresql.Driver`
+- Username: `geoserver`
+- Password: `geoserver`
+
+**DDL Configuration:**
+- **❌ UN-check "Create database tables"** (tables already exist from Step 3.1)
+
+Click **"Test Connection"** - should succeed.
+Click **"Save"**.
+
+### Step 3.3: Create JDBC Role Service
+
+Click **"Add new"** under "Role Services" section:
+
+**Configuration:**
+- Name: `jdbc` (IMPORTANT: exact spelling!)
+- Administrator role: Leave as **"Choose One"** (we'll set this later)
+- Group administrator role: Leave as **"Choose One"** (we'll set this later)
+
+**JDBC Connection:**
+- JDBC URL: `jdbc:postgresql://postgis:5432/geoserver`
+- Driver class: `org.postgresql.Driver`
+- Username: `geoserver`
+- Password: `geoserver`
+
+**DDL Configuration:**
+- **❌ UN-check "Create database tables"** (tables already exist from Step 3.1)
+
+Click **"Test Connection"** - should succeed.
+Click **"Save"**.
+
+**Restart GeoServer:**
+```bash
+docker-compose restart geoserver
+```
+
+Wait for startup:
+```bash
+# Wait until you see "Server startup in" message
+docker logs geoserver 2>&1 | grep "Server startup"
+```
+
+### Step 3.4: Create Default Roles
+
+```bash
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "
 INSERT INTO roles (name, parent) VALUES ('ADMIN', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO roles (name, parent) VALUES ('GROUP_ADMIN', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO roles (name, parent) VALUES ('AUTHENTICATED', NULL) ON CONFLICT DO NOTHING;
-EOF
+"
 ```
 
 **Verify:**
 ```bash
-docker exec geoserver-postgis psql -U geoserver -d geoserver -c "\dt" | grep -E "users|roles|groups"
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "SELECT name FROM roles ORDER BY name;"
 ```
 
-### Step 3.2: Extract XML Security Files
+### Step 3.5: Configure Administrator Roles
+
+Now go back and set the administrator roles:
+
+1. In **Security** → **Users, Groups, and Roles**
+2. Under "Role Services", click **`jdbc`** to edit
+3. Now the dropdowns will show the roles:
+   - Administrator role: Select **`ADMIN`**
+   - Group administrator role: Select **`GROUP_ADMIN`**
+4. Click **Save**
+
+### Step 3.6: Extract XML Security Files
 
 ```bash
 # Copy users.xml and roles.xml from container
@@ -317,7 +430,7 @@ docker run --rm \
   "
 ```
 
-### Step 3.3: Run Migration Script
+### Step 3.7: Run Migration Script
 
 **The migration script** (`migrate-security.py`) parses XML and inserts into PostgreSQL.
 
@@ -358,7 +471,9 @@ Inserting 424 user-role assignments...
    User Properties: 421
 ```
 
-### Step 3.4: Verify Security Data
+**Note:** The migration script correctly uses `enabled='Y'` for all enabled users.
+
+### Step 3.8: Verify Security Data
 
 ```bash
 docker exec geoserver-postgis psql -U geoserver -d geoserver -c "
@@ -384,73 +499,18 @@ SELECT
 
 ---
 
-## Phase 4: Configure JDBC Security Services
+## Phase 4: Configure Authentication and Authorization
 
-**CRITICAL:** This must be done carefully in the correct order.
+**Note:** JDBC services were already created in Phase 3. Now we configure how they're used.
 
-### Step 4.1: Access GeoServer Web UI
+1. Go to **Security** → **Settings**
+2. Find the **"Active role service"** dropdown
+3. Select **`jdbc`**
+4. Click **Save**
 
-1. Open browser: http://localhost:8080/geoserver/web/
-2. Login with XML admin credentials from source system
-3. Navigate to: **Security** → **Users, Groups, and Roles**
+**IMPORTANT:** This step is critical! Without setting the active role service to `jdbc`, GeoServer will continue using the default XML role service and your migrated roles won't be used.
 
-### Step 4.2: Add JDBC User Group Service
-
-Click **"Add new"** under "User Group Services" section:
-
-**Configuration:**
-- Name: `jdbc`
-- Enabled: ✓ (checked)
-- Password encryption: **Digest**
-- Password policy: `default`
-
-**JDBC Connection:**
-- JDBC URL: `jdbc:postgresql://postgis:5432/geoserver`
-- Driver class: `org.postgresql.Driver`
-- Username: `geoserver`
-- Password: `geoserver`
-
-Click **"Test Connection"** - should succeed.
-Click **"Save"**.
-
-### Step 4.3: Add JDBC Role Service
-
-Click **"Add new"** under "Role Services" section:
-
-**IMPORTANT:** The administrator role dropdowns will not show any roles until the service is created. You must create the service first, then edit it to add the administrator roles.
-
-**Initial Configuration (Step 1):**
-- Name: `jdbc`
-- Administrator role: Select **"Choose One"** (leave empty)
-- Group administrator role: Select **"Choose One"** (leave empty)
-
-**JDBC Connection:**
-- JDBC URL: `jdbc:postgresql://postgis:5432/geoserver`
-- Driver class: `org.postgresql.Driver`
-- Username: `geoserver`
-- Password: `geoserver`
-
-Click **"Test Connection"** - should succeed.
-Click **"Save"**.
-
-**Configure Administrator Roles (Step 2):**
-
-After saving, immediately click on the **`jdbc`** role service to edit it again:
-
-- Administrator role: Select **`ADMIN`** (now available in dropdown)
-- Group administrator role: Select **`GROUP_ADMIN`** (now available in dropdown)
-
-Click **"Save"** again.
-
-This two-step process is necessary because the role dropdowns are populated from the service itself, which doesn't exist until after the first save.
-
-### Step 4.4: DO NOT Delete Default Services
-
-**IMPORTANT:** Keep the `default` XML user and role services as backup!
-
-The JDBC services will be used by default if they're listed first, but the XML services provide a fallback if database connection fails.
-
-### Step 4.5: Configure Authentication Provider
+### Step 4.2: Configure Authentication Provider (Keep Default for Admin)
 
 Go to **Security** → **Authentication**
 
@@ -458,27 +518,52 @@ Find **"default"** authentication provider, click to edit:
 - User Group Service: Select **`default`** (keep XML for admin access)
 - Click **Save**
 
-**Why?** We keep the XML service for administrative access. Production users will use a separate authentication mechanism or you can switch this to `jdbc` after thorough testing.
+**Why?** We keep the XML service for administrative access as a fallback. Production users will authenticate via AuthKey.
 
-### Step 4.6: Update AuthKey Filter (If Using)
+### Step 4.3: Update AuthKey Filter
+
+**CRITICAL:** This is what enables AuthKey authentication with JDBC users.
 
 Go to **Security** → **Authentication** → scroll to **Authentication Filters**
 
 Find **"AuthKey"** filter, click to edit:
-- User Group Service: Select **`jdbc`**
+- User/Group Service: Select **`jdbc`** (IMPORTANT: must be exact spelling!)
 - Click **Save**
 
-This allows AuthKey API authentication to use the database users.
+**Restart GeoServer** to ensure the configuration is loaded:
 
-### Step 4.7: Set Active Role Service
+```bash
+docker-compose restart geoserver
+```
 
-Go to **Security** → **Settings**
+Wait for startup (check with `docker logs geoserver 2>&1 | grep "Server startup"`).
 
-Find the **"Active role service"** dropdown:
-- Select **`jdbc`**
-- Click **Save**
+### Step 4.4: Test AuthKey Authentication
 
-**IMPORTANT:** This step is critical! Without setting the active role service to `jdbc`, GeoServer will continue using the default XML role service and your migrated roles won't be used.
+After restart, test with a user's UUID from the database:
+
+```bash
+# Get a test user's authkey
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "
+SELECT u.name, p.propvalue as authkey
+FROM users u
+JOIN user_props p ON u.name = p.username
+WHERE p.propname = 'UUID'
+LIMIT 1;
+"
+```
+
+Test the authkey:
+
+```bash
+curl -s "http://localhost:8080/geoserver/wfs?SERVICE=WFS&REQUEST=GetCapabilities&VERSION=2.0.0&authkey=<UUID_FROM_ABOVE>" | head -5
+```
+
+**Expected:** Should return XML (not 401 error). All users should have `enabled='Y'` from the migration script.
+
+### Step 4.5: DO NOT Delete Default Services
+
+**IMPORTANT:** Keep the `default` XML user and role services as backup! They provide a fallback if database connection fails.
 
 **Checkpoint 3:**
 - [ ] JDBC user service created and tested
@@ -600,16 +685,34 @@ Create a secure record of:
 
 ## Troubleshooting Guide
 
+### Issue: AuthKey returns "user is disabled" or 401 Unauthorized
+
+**Symptom:** Logs show "Found user X for key Y, but this user is disabled"
+
+**Cause:** The `enabled` column has wrong values. GeoServer expects `'Y'` for enabled, not `'1'`.
+
+**Solution:**
+```bash
+docker exec geoserver-postgis psql -U geoserver -d geoserver -c "
+UPDATE users SET enabled = 'Y' WHERE enabled = '1';
+UPDATE users SET enabled = 'N' WHERE enabled = '0';
+SELECT enabled, COUNT(*) FROM users GROUP BY enabled;
+"
+```
+
+Then restart GeoServer: `docker-compose restart geoserver`
+
 ### Issue: "Failed login" even with correct password
 
 **Possible causes:**
 1. Password encoder mismatch (Digest vs Plain)
 2. Authentication provider pointing to wrong service
 3. User exists in XML but not in database
+4. User is disabled (check `enabled='Y'`)
 
 **Solution:**
 ```bash
-# Check if user exists in database
+# Check if user exists in database and is enabled
 docker exec geoserver-postgis psql -U geoserver -d geoserver -c "
 SELECT name, LEFT(password, 20) as pwd_preview, enabled
 FROM users
@@ -620,6 +723,25 @@ WHERE name='username_here';
 # In Web UI: Security → Users, Groups, Roles → Services → jdbc (edit)
 # Verify "Password encryption" is set to "Digest"
 ```
+
+### Issue: "Unknown user/group service: jdbc" error
+
+**Symptom:** HTTP 500 error with message "Unknown user/group service: jdbc"
+
+**Cause:** Typo in the service name (e.g., `jbc` instead of `jdbc`) or service wasn't reloaded after creation.
+
+**Solution:**
+```bash
+# Check actual service name
+docker exec geoserver bash -c "ls /opt/geoserver/data_dir/security/usergroup/"
+```
+
+If the directory is named incorrectly (e.g., `jbc`), fix it in the web UI:
+1. Go to **Security** → **Users, Groups, and Roles**
+2. Click on the incorrectly named service
+3. Change the name to exactly `jdbc`
+4. Click **Save**
+5. Restart: `docker-compose restart geoserver`
 
 ### Issue: "Unknown user/group service: default"
 
@@ -713,11 +835,14 @@ Migration is successful when ALL of the following are true:
 - [ ] **Catalog:** 300+ workspaces visible in GeoServer web UI
 - [ ] **Catalog:** 3000+ layers visible and functional
 - [ ] **Catalog:** Database contains all workspace/layer data
-- [ ] **Security:** 421 users exist in PostgreSQL
+- [ ] **Security:** 421 users exist in PostgreSQL with `enabled='Y'`
 - [ ] **Security:** 424 roles exist in PostgreSQL
-- [ ] **Security:** Test user can authenticate via web UI
-- [ ] **Security:** Test user can authenticate via REST API
-- [ ] **AuthKey:** API authentication works with UUIDs
+- [ ] **Security:** JDBC user/group service created with exact name `jdbc`
+- [ ] **Security:** JDBC role service created with ADMIN and GROUP_ADMIN configured
+- [ ] **Security:** Active role service set to `jdbc`
+- [ ] **AuthKey:** Filter configured to use `jdbc` user/group service
+- [ ] **AuthKey:** Test WFS request with UUID authkey returns XML (not 401)
+- [ ] **AuthKey:** Logs show "Found user X for key Y" (not "user is disabled")
 - [ ] **Performance:** GeoServer starts within 2-3 minutes
 - [ ] **Stability:** No errors in GeoServer logs
 - [ ] **Backup:** Database backup created and tested
@@ -735,13 +860,18 @@ SELECT name, enabled FROM users ORDER BY name;
 
 **Add new user:**
 ```sql
-INSERT INTO users (name, password, enabled) VALUES ('newuser', 'digest1:hash', '1');
+INSERT INTO users (name, password, enabled) VALUES ('newuser', 'digest1:hash', 'Y');
 INSERT INTO user_roles (username, rolename) VALUES ('newuser', 'AUTHENTICATED');
 ```
 
 **Disable user:**
 ```sql
-UPDATE users SET enabled='0' WHERE name='username';
+UPDATE users SET enabled='N' WHERE name='username';
+```
+
+**Enable user:**
+```sql
+UPDATE users SET enabled='Y' WHERE name='username';
 ```
 
 ### Backup Schedule

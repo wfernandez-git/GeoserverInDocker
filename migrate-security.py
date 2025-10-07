@@ -31,7 +31,7 @@ def parse_users_xml(xml_path):
     for user_elem in root.findall('.//gs:user', ns):
         name = user_elem.get('name')
         password = user_elem.get('password')
-        enabled = '1' if user_elem.get('enabled') == 'true' else '0'
+        enabled = 'Y' if user_elem.get('enabled') == 'true' else 'N'
 
         users.append((name, password, enabled))
 
